@@ -50,7 +50,7 @@ A **Context Layer** that:
 
 - **Python 3.11+** — Simple, readable, fast iteration
 - **SQLite** — Portable, sufficient for prototype, easy to upgrade
-- **Claude API** — Raw function calling (no LangChain overhead)
+- **OpenAI API** — Raw tool calling (no LangChain overhead)
 - **No frameworks** — Direct Python functions, wrap in FastAPI later if needed
 
 ## Project Structure
@@ -69,10 +69,12 @@ A **Context Layer** that:
 │   │   ├── connection.py  # Database helper
 │   │   └── seed.py        # Mock data generator
 │   ├── context/
-│   │   └── api.py         # Context query functions
+│   │   ├── api.py         # Context query functions (tool impls)
+│   │   └── sql_tools.py   # Safe SQL validation/execution helpers
 │   ├── agent/
-│   │   ├── tools.py       # Claude tool definitions
-│   │   └── agent.py       # Agent conversation loop
+│   │   ├── tools.py       # OpenAI tool definitions
+│   │   ├── llm_client.py  # Thin OpenAI client wrapper
+│   │   └── agent.py       # Tool-calling agent loop
 │   └── main.py            # Demo entrypoint
 ├── data/
 │   └── context.db         # SQLite database (generated)
@@ -94,7 +96,7 @@ pip install -r requirements.txt
 python src/db/seed.py
 
 # Run the agent demo
-export ANTHROPIC_API_KEY=your_key_here
+export OPENAI_API_KEY=your_key_here
 python src/main.py
 ```
 

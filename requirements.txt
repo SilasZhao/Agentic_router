@@ -1,5 +1,5 @@
 # Core dependencies
-anthropic>=0.18.0    # Claude API client
+openai>=1.0.0        # OpenAI API client (tool calling)
 
 # Development
 pytest>=8.0.0        # Testing
