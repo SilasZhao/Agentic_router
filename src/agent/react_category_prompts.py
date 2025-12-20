@@ -10,13 +10,75 @@ They include:
 - ReAct-friendly guidance + examples per category
 """
 
-from src.agent.categories import QueryCategory
-from src.agent.category_prompts import SCHEMA_INTRO, TOOL_GLOSSARY
+SCHEMA_INTRO = """Database schema (SQLite, V2) — key tables/columns for safe_sql_query:
+
+Dimensions:
+- deployments(id, model_id, backend_id, enabled, weight, created_at)
+- models(id, provider, max_context_tokens, supports_streaming, supports_tools, supports_json_mode, notes)
+- backends(id, provider, region, backend_type, notes)
+- users(id, tier_id, daily_budget_usd, latency_sla_p95_ms_override, preferences_json)
+- tiers(id, latency_sla_p95_ms, sla_window_sec, max_error_rate, max_timeout_rate)
+
+Current snapshot:
+- deployment_state_current(deployment_id, status, window_sec, sample_count, updated_at, latency_p50_ms, latency_p95_ms, error_rate, timeout_rate, queue_depth, rate_limit_remaining, ttft_p50_ms, ttft_p95_ms, decode_toks_per_sec_p50, decode_toks_per_sec_p95)
+
+Event history:
+- requests(id, created_at, user_id, deployment_id, model_id, backend_id, task_type, input_tokens, output_tokens, latency_ms, ttft_ms, decode_toks_per_sec, cost_usd, status, error_code, router_version, experiment_id, routing_reason_json)
+- quality_scores(request_id, eval_type, score, evaluated_at)
+- incidents(id, target_type, target_id, title, status, started_at, resolved_at)
+
+Notes for safe_sql_query:
+- Prefer querying deployments + deployment_state_current for current health questions.
+- Prefer querying requests for historical traffic/latency/errors.
+"""
 
 
-def _react_examples(category: QueryCategory) -> str:
+TOOL_GLOSSARY = """Tool glossary (name -> purpose -> key args):
+- get_active_incidents: list currently active incidents.
+  - args: target_type (deployment|model|backend, optional), target_id (optional)
+  - use when: any "what's happening now" or root-cause investigation
+
+- get_deployment_status: current health snapshot of deployments.
+  - args: model_id (optional), backend_id (optional), status (healthy|degraded|down, optional)
+  - use when: health/staleness/unhealthy questions; always useful for ops checks
+
+- get_recent_requests: recent request samples (for debugging).
+  - args: since/until ("2 hours ago", "yesterday", RFC3339Z), limit (<=500), filters: user_id, user_tier, deployment_id, model_id, backend_id, status
+  - use when: you need evidence examples (who is slow, where errors happen)
+
+- get_request_detail: full detail for one request.
+  - args: request_id (required)
+  - use when: question mentions req_...
+
+- get_user_context: tier + budget usage for one user.
+  - args: user_id (required)
+  - use when: question mentions user_... or asks about budget/SLA
+
+- get_latency_trends: p50/p95 and error_rate over time.
+  - args: since/until, granularity (hour|day), optional filters: deployment_id/model_id/backend_id
+  - use when: "spike", "yesterday vs last week", tail latency questions
+
+- get_quality_summary: aggregated quality scores.
+  - args: since/until, optional model_id, task_type
+  - use when: "quality drop", "best model for summarization"
+
+- get_request_volume: traffic volume over time (counts + cost).
+  - args: group_by (tier|model|backend|deployment), since/until, granularity (hour|day)
+  - use when: traffic/cost breakdown questions
+
+- safe_sql_query: guarded ad-hoc SELECT for edge cases not covered by domain tools.
+  - args: query (SELECT/WITH only), params (optional), max_rows (default 100), timeout_sec (default 5)
+  - use when: you need a custom join/aggregation not exposed by domain tools.
+  - avoid when: a domain tool already answers it.
+"""
+
+
+Category = str  # "STATUS" | "LOOKUP" | "INVESTIGATE" | "TRENDS" | "NOVEL"
+
+
+def _react_examples(category: Category) -> str:
     # Keep examples short and explicitly tool-calling oriented.
-    if category == QueryCategory.STATUS:
+    if category == "STATUS":
         return (
             "Examples (ReAct style):\n"
             "User: Which deployments are unhealthy right now?\n"
@@ -28,7 +90,7 @@ def _react_examples(category: QueryCategory) -> str:
             "Assistant: Answer: return grouped counts.\n"
         )
 
-    if category == QueryCategory.LOOKUP:
+    if category == "LOOKUP":
         return (
             "Examples (ReAct style):\n"
             "User: Explain why request req_abc123 was routed to AWS\n"
@@ -39,7 +101,7 @@ def _react_examples(category: QueryCategory) -> str:
             "Assistant: Answer: summarize tier, budget used/remaining.\n"
         )
 
-    if category == QueryCategory.INVESTIGATE:
+    if category == "INVESTIGATE":
         return (
             "Examples (ReAct style):\n"
             "User: Why are premium users seeing slow responses?\n"
@@ -49,7 +111,7 @@ def _react_examples(category: QueryCategory) -> str:
             "Assistant: Answer: cite evidence (latency_ms/ttft_ms), identify affected deployments/backends, suggest next filter if needed.\n"
         )
 
-    if category == QueryCategory.TRENDS:
+    if category == "TRENDS":
         return (
             "Examples (ReAct style):\n"
             "User: How many requests did we serve by tier this week?\n"
@@ -95,11 +157,11 @@ def react_system_prompt_all() -> str:
         "\n".join(
             [
                 "Category guidance (use whichever matches the query):",
-                "STATUS:\n" + _category_guidance(QueryCategory.STATUS),
-                "LOOKUP:\n" + _category_guidance(QueryCategory.LOOKUP),
-                "INVESTIGATE:\n" + _category_guidance(QueryCategory.INVESTIGATE),
-                "TRENDS:\n" + _category_guidance(QueryCategory.TRENDS),
-                "NOVEL:\n" + _category_guidance(QueryCategory.NOVEL),
+                "STATUS:\n" + _category_guidance("STATUS"),
+                "LOOKUP:\n" + _category_guidance("LOOKUP"),
+                "INVESTIGATE:\n" + _category_guidance("INVESTIGATE"),
+                "TRENDS:\n" + _category_guidance("TRENDS"),
+                "NOVEL:\n" + _category_guidance("NOVEL"),
             ]
         )
     )
@@ -108,11 +170,11 @@ def react_system_prompt_all() -> str:
         "\n".join(
             [
                 "Examples (ReAct style, use as patterns):",
-                _react_examples(QueryCategory.STATUS),
-                _react_examples(QueryCategory.LOOKUP),
-                _react_examples(QueryCategory.INVESTIGATE),
-                _react_examples(QueryCategory.TRENDS),
-                _react_examples(QueryCategory.NOVEL),
+                _react_examples("STATUS"),
+                _react_examples("LOOKUP"),
+                _react_examples("INVESTIGATE"),
+                _react_examples("TRENDS"),
+                _react_examples("NOVEL"),
             ]
         )
     )
@@ -120,27 +182,27 @@ def react_system_prompt_all() -> str:
     return "\n\n".join(blocks).strip() + "\n"
 
 
-def _category_guidance(category: QueryCategory) -> str:
-    if category == QueryCategory.STATUS:
+def _category_guidance(category: Category) -> str:
+    if category == "STATUS":
         return (
             "- Goal: current status/health/incidents/simple counts.\n"
             "- Prefer get_active_incidents + get_deployment_status.\n"
             "- Use safe_sql_query only for counts/group-bys not provided by tools.\n"
         )
-    if category == QueryCategory.LOOKUP:
+    if category == "LOOKUP":
         return (
             "- Goal: drill down on a specific request/user.\n"
             "- If req_... present: get_request_detail(request_id=...).\n"
             "- If user_... present: get_user_context(user_id=...).\n"
             "- Optionally: get_recent_requests(user_id=..., limit=20) for supporting evidence.\n"
         )
-    if category == QueryCategory.INVESTIGATE:
+    if category == "INVESTIGATE":
         return (
             "- Goal: root-cause / why.\n"
             "- Usually start with incidents + deployment health.\n"
             "- Then choose: get_recent_requests (examples) or get_latency_trends/get_quality_summary (aggregates) or get_request_detail (single request).\n"
         )
-    if category == QueryCategory.TRENDS:
+    if category == "TRENDS":
         return (
             "- Goal: time-based aggregates/comparisons.\n"
             "- request counts/cost => get_request_volume\n"

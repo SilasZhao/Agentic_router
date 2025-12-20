@@ -19,7 +19,6 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.tools import StructuredTool
 from langgraph.graph import END, StateGraph
 
-from src.agent.categories import QueryCategory
 from src.agent.llm import get_executor_llm
 from src.agent.react_category_prompts import react_system_prompt_all
 from src.context import api as context_api
@@ -31,7 +30,6 @@ class ReactState(TypedDict, total=False):
     db_path: str
     step: int
     max_steps: int
-    category: QueryCategory
     messages: list[Any]
     tool_results: dict[str, Any]
     tools_used: list[str]
@@ -61,11 +59,6 @@ def default_tool_registry() -> ToolRegistry:
             "safe_sql_query": safe_sql_query,
         }
     )
-
-
-def _recommended_tools_for_category(category: QueryCategory, registry: ToolRegistry) -> list[str]:
-    # Kept for backward compatibility of state/trace structure; not used by default.
-    return []
 
 
 def _build_langchain_tools(registry: ToolRegistry) -> list[StructuredTool]:
