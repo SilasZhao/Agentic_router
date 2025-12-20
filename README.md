@@ -48,21 +48,23 @@ A **Context Layer** that:
 
 ## Tech Stack
 
-- **Python 3.11+** — Simple, readable, fast iteration
+- **Python 3.12+** — Simple, readable, fast iteration
 - **SQLite** — Portable, sufficient for prototype, easy to upgrade
-- **OpenAI API** — Raw tool calling (no LangChain overhead)
-- **No frameworks** — Direct Python functions, wrap in FastAPI later if needed
+- **LangGraph + LangChain** — Orchestration + tool interfaces
+- **LLM (default)** — OpenAI `gpt-5-nano` (tool-calling)
+- **LLM (optional)** — local Ollama (model-dependent tool calling support)
+- **Tracing (optional)** — LangSmith
 
 ## Project Structure
 
 ```
 ├── README.md              # You are here
-├── CLAUDE.md              # AI assistant instructions
-├── requirements.md        # Original problem statement
+├── system_req.md          # Original problem statement
 ├── docs/
 │   ├── DESIGN.md          # Architecture decisions & tradeoffs
 │   ├── SCHEMA.md          # Database schema (source of truth)
-│   └── TOOLS.md           # Agent tool contracts
+│   ├── TOOLS.md           # Agent tool contracts
+│   └── plans/             # Historical design plans / iterations
 ├── src/
 │   ├── db/
 │   │   ├── schema.sql     # SQLite DDL
@@ -72,15 +74,23 @@ A **Context Layer** that:
 │   │   ├── api.py         # Context query functions (tool impls)
 │   │   └── sql_tools.py   # Safe SQL validation/execution helpers
 │   ├── agent/
-│   │   ├── tools.py       # OpenAI tool definitions
-│   │   ├── llm_client.py  # Thin OpenAI client wrapper
-│   │   └── agent.py       # Tool-calling agent loop
+│   │   ├── llm.py                 # LLM factory (OpenAI/Ollama)
+│   │   ├── react_loop_graph.py    # ReAct agent (plan <-> execute loop)
+│   │   ├── react_category_prompts.py # Holistic ReAct system prompt (schema + tools + examples)
+│   │   └── unsuccessful/          # Legacy v1 agent (kept for reference)
 │   └── main.py            # Demo entrypoint
 ├── data/
 │   └── context.db         # SQLite database (generated)
 └── tests/
-    └── test_demo.py       # Demo scenario tests
+    └── ...                # Unit tests for tools + ReAct loop
 ```
+
+## Plans (design history)
+
+We keep our past design iterations as markdown plans in `docs/plans/` (copied from Cursor’s `.cursor/plans/` so they’re versioned in Git).
+
+- Use these to understand **why** the architecture changed (v1 planner/validator → ReAct loop).
+- They are **not** executed by the code; they are design artifacts.
 
 ## Quick Start
 
@@ -88,17 +98,101 @@ A **Context Layer** that:
 # Clone and setup
 git clone https://github.com/SilasZhao/Agentic_router.git
 cd Agentic_router
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+
+# Recommended: project conda env
+conda env create -f environment.yml
+conda activate agentic_router
 
 # Initialize database with mock data
 python src/db/seed.py
 
-# Run the agent demo
+# Run the ReAct agent demo (OpenAI)
+export LLM_PROVIDER=openai
 export OPENAI_API_KEY=your_key_here
-python src/main.py
+export OPENAI_EXECUTOR_MODEL=gpt-5-nano   # optional (default is gpt-5-nano)
+
+python -m src.main --once "Are there any active incidents?"
 ```
+
+## Agent Design (current): ReAct loop (read-only)
+
+The current agent is a **read-only ReAct loop**:
+- **plan**: the LLM decides what tool(s) to call next (or to stop and answer)
+- **execute**: run tool calls, append `ToolMessage` observations, loop back to plan
+- **max_steps**: hard stop after 10 iterations to prevent infinite loops
+- **SQL fallback**: `safe_sql_query` is available for ad-hoc SELECTs with strict guardrails (SELECT-only, LIMIT, timeout, audit)
+
+## Workflow (current)
+
+```
+┌──────────────┐
+│  User query  │
+└──────┬───────┘
+       │
+       ▼
+┌─────────────────────────┐
+│ plan (LLM w/ tools)     │
+│ - may call 1+ tools     │
+│ - or stop and answer    │
+└──────────┬──────────────┘
+           │ tool_calls?
+     ┌─────┴───────┐
+     │             │
+     ▼             ▼
+┌───────────┐   ┌──────────┐
+│ execute   │   │   END    │
+│ run tools │   │ response │
+└─────┬─────┘   └──────────┘
+      │
+      └─────────────── back to plan (max 10 loops)
+```
+
+## CLI tips
+
+- **Show graph**:
+
+```bash
+python -m src.main --show-graph
+python -m src.main --show-graph-ascii
+python -m src.main --show-graph-mermaid
+```
+
+- **Dump full ReAct message history** (System/Human/AI/Tool):
+
+```bash
+python -m src.main --dump-messages --once "system status?"
+```
+
+## Legacy v1 agent (moved)
+
+The earlier classifier/planner/validator agent was moved to `src/agent/unsuccessful/` for reference.
+See `src/agent/unsuccessful/README.md` for its structure and notes.
+
+## Design evolution (v1 → current)
+
+This repo iterated from a “correctness-first, schema-aware planner” to a simpler **ReAct loop** as we learned what breaks in practice.
+
+- **Schema design**
+  - **v1 intent**: a minimal SQLite schema + deterministic seeding to support the tool contracts in `docs/TOOLS.md`.
+  - **current**: a richer schema (see `src/db/schema.sql`) with clear separation between:
+    - **current snapshot** state (e.g. `deployment_state_current`)
+    - **event history** (e.g. `requests`, `quality_scores`, `incidents`)
+  - **staleness** is treated as first-class: tools flag stale data rather than hiding it. We anchor staleness to the latest deployment snapshot timestamp (to avoid other tables making all deployments appear stale).
+
+- **Tool design**
+  - **domain tools first**: we implemented a small set of high-signal, stable tools in `src/context/api.py` (contracts in `docs/TOOLS.md`) so the agent doesn’t have to invent joins/logic every time.
+  - **read-only guarantees**: tools never mutate the DB; failures return consistent error envelopes.
+  - **escape hatch**: `safe_sql_query` exists for edge cases not covered by domain tools, but is heavily guarded (SELECT-only, LIMIT, timeout, audit) in `src/context/sql_tools.py`.
+
+- **System/agent design**
+  - **v1**: `classify → (known tools) OR (plan JSON → validate → execute)` with strict schemas and guardrails. This was traceable, but brittle (planner formatting/parsing, overly constrained args).
+  - **current**: a **two-node ReAct loop** (`src/agent/react_loop_graph.py`):
+    - the model can call **a sequence of tools per step**
+    - observations are appended as `ToolMessage`s so the next plan turn sees prior results
+    - a hard `max_steps` cap prevents infinite loops
+    - the system prompt is holistic and schema-aware (`src/agent/react_category_prompts.py`)
+
+For the original design artifacts and decisions, see `docs/plans/`.
 
 ## Example Queries
 
@@ -125,64 +219,71 @@ python src/main.py
 
 ## Mock Data Scenarios
 
-The synthetic data tells a story:
 
-| Scenario | What It Tests |
-|----------|---------------|
-| `llama-70b/neocloud` is DOWN | Unhealthy deployment detection |
-| `gpt-4/k8s` is DEGRADED | Degraded vs. down distinction |
-| Active incident on `llama-70b/neocloud` | Incident correlation |
-| Premium users → `gpt-4/aws` | Tier-based routing visibility |
-| Quality drop during incident | Causal debugging |
+Mock data is generated by `src/db/seed.py` (deterministic, seeded RNG) to populate `data/context.db` with a coherent time window and the scenarios above.
+
+The latest seed report in this repo is available at `reports/seed_20251219T212902Z_seed42/` (see `report.md` / `report.json`).
 
 ---
 
-## TODO
+## Future: HITL and RAG
 
-### Phase 1: Foundation
-- [ ] Create project directory structure (`src/`, `data/`, `tests/`)
-- [ ] Implement `src/db/schema.sql` — SQLite DDL from SCHEMA.md
-- [ ] Implement `src/db/connection.py` — Database connection helper
-- [ ] Add `requirements.txt` with dependencies
+We want the agent to **continuously adapt to our system** and learn from mistakes, but in a **correctness-first** way.
 
-### Phase 2: Data Layer
-- [ ] Implement `src/db/seed.py` — Mock data generator
-  - [ ] Generate 6 deployments with varied health states
-  - [ ] Generate 10 users across 3 tiers
-  - [ ] Generate ~500 requests over 7 days
-  - [ ] Generate ~300 quality scores (60% coverage)
-  - [ ] Generate 2 incidents (1 active, 1 resolved)
+- **HITL (Human-in-the-Loop)**: learnings are only created/promoted when a human flags an answer as incorrect and approves the correction. This avoids “self-updating memory” approaches (e.g., mem0) where an LLM can store incorrect knowledge without review.
+- **Why no RAG yet**: we don’t have enough real, verified operator examples. Today, “memory” is mainly the **system prompt**, where we encode scenarios and a few ReAct-style examples.
+- **Future RAG plan**:
+  - capture an **evidence bundle** for each incorrect answer (query, tool calls/args, tool outputs, final response)
+  - human reviews and promotes approved items into:
+    - curated scenario/examples (prompt or policies)
+    - (future) a vector DB of historical questions + approved playbooks
+  - add a lightweight classifier + retrieval step so the agent can fetch similar historical questions and playbooks before entering the ReAct loop
 
-### Phase 3: Context API
-- [ ] Implement `src/context/api.py` — Query functions
-  - [ ] `get_deployment_status()` — Current health of all deployments
-  - [ ] `get_deployment_details()` — Deep dive on one deployment
-  - [ ] `get_active_incidents()` — Current incidents
-  - [ ] `get_user_context()` — User tier, budget, usage
-  - [ ] `search_requests()` — Historical request lookup
-  - [ ] `get_quality_summary()` — Quality trends by model/time
-
-### Phase 4: Agent Integration
-- [ ] Implement `src/agent/tools.py` — Claude tool definitions
-- [ ] Implement `src/agent/agent.py` — Conversation loop with tool dispatch
-- [ ] Implement `src/main.py` — Demo entrypoint with example questions
-
-### Phase 5: Polish
-- [ ] Add `tests/test_demo.py` — Verify demo scenarios work
-- [ ] Validate all three query categories (health, debugging, trends)
-- [ ] Clean up commit history
-- [ ] Final README review
-
----
-
-## Design Decisions
-
-See `docs/DESIGN.md` for detailed rationale. Key choices:
-
-1. **Deployment as unit of health** — GPT-4 on AWS vs GPT-4 on k8s have independent health
-2. **Budget is derived** — Computed from `SUM(cost)`, not stored separately
-3. **Request context is denormalized** — Fast queries on routing decisions
-4. **Staleness is explicit** — API flags old data, doesn't hide it
+```
+┌──────────────┐
+│  Operator Q  │
+└──────┬───────┘
+       │
+       ▼
+┌──────────────────────┐
+│ ReAct agent (tools)  │
+│ plan ↔ execute loop  │
+└──────┬───────────────┘
+       │
+       ▼
+┌──────────────────────────────┐
+│ Answer + evidence (tool log) │
+└──────┬───────────────────────┘
+       │
+       ├───────────────(if incorrect)─────────────┐
+       │                                          │
+       ▼                                          ▼
+┌──────────────────────┐                 ┌───────────────────────┐
+│ Done (no learning)   │                 │ HITL: correction flow │
+└──────────────────────┘                 │ (human approves)      │
+                                         └──────────┬────────────┘
+                                                    │
+                                                    ▼
+                                         ┌────────────────────────----------------
+                                         │ Promote learnings into                 │
+                                         │ - system prompt (scenarios/examples)   │
+                                         │ - few-shot library (approved examples) │
+                                         │ - policy DB (guardrails/defaults)      │
+                                         │ - (future) vector DB (RAG corpus)      │
+                                         └──────────┬────────────-----------------
+                                                    │
+                                                    ▼
+                                         ┌────────────────────────┐
+                                         │ RAG retrieval (future) │
+                                         │ (similar Qs/playbooks) │
+                                         └──────────┬────────────-┘
+                                                    │
+                                                    ▼
+                                         ┌────────────────────────┐
+                                         │ Next run: retrieve →   │
+                                         │ ReAct tools            │
+                                         └────────────────────────┘
+```
 
 ## Documentation
 
@@ -191,6 +292,8 @@ See `docs/DESIGN.md` for detailed rationale. Key choices:
 | `docs/DESIGN.md` | Architecture, entities, tradeoffs |
 | `docs/SCHEMA.md` | Database schema (source of truth) |
 | `docs/TOOLS.md` | Agent tool contracts |
+| `docs/plans/` | Historical design plans / iterations |
+| `reports/` | Seed reports for generated datasets |
 
 ## License
 

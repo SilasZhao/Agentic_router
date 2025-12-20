@@ -1,5 +1,11 @@
 # Core dependencies
 openai>=1.0.0        # OpenAI API client (tool calling)
+langchain>=0.3.0     # Core LangChain
+langchain-openai>=0.3.0  # OpenAI Chat models for LangChain
+langgraph>=0.2.0     # LangGraph orchestration
+langsmith>=0.1.0     # Tracing/observability (optional)
+langchain-google-genai>=2.0.0  # Gemini Flash classifier client
+langchain-ollama>=0.2.0        # Local Ollama support
 
 # Development
 pytest>=8.0.0        # Testing
