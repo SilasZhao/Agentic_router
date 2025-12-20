@@ -257,10 +257,10 @@ We want the agent to **continuously adapt to our system** and learn from mistake
 └──────┬───────┘
        │
        ▼
-┌──────────────────────┐
-│ ReAct agent (tools)  │
-│ plan ↔ execute loop  │
-└──────┬───────────────┘
+┌──────────────────────-----------┐
+│ ReAct agent (tools)             │
+│ retrieve ↔ plan ↔ execute loop  │
+└──────┬───────────────-----------┘
        │
        ▼
 ┌──────────────────────────────┐
@@ -283,12 +283,6 @@ We want the agent to **continuously adapt to our system** and learn from mistake
                                          │ - policy DB (guardrails/defaults)      │
                                          │ - (future) vector DB (RAG corpus)      │
                                          └──────────┬────────────-----------------
-                                                    │
-                                                    ▼
-                                         ┌────────────────────────┐
-                                         │ RAG retrieval (future) │
-                                         │ (similar Qs/playbooks) │
-                                         └──────────┬────────────-┘
                                                     │
                                                     ▼
                                          ┌────────────────────────┐
