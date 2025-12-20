@@ -1,21 +1,29 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Allow running this file directly (e.g. `python src/db/seed.py`) by ensuring the
+# project root is on sys.path so `import src...` works.
+#
+# IMPORTANT: when executed as a script, Python sets sys.path[0] to this file's
+# directory (src/db). That directory contains `inspect.py`, which can shadow the
+# stdlib `inspect` module and break `dataclasses` at import time. We remove the
+# script directory from sys.path and force the project root to the front.
+if __package__ is None or __package__ == "":  # pragma: no cover
+    _ROOT = Path(__file__).resolve().parents[2]
+    _SCRIPT_DIR = str(Path(__file__).resolve().parent)
+    sys.path = [p for p in sys.path if p != _SCRIPT_DIR]
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+
 import json
 import os
 import random
 import sqlite3
-import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Callable, Iterable, Iterator
-
-# Allow running this file directly (e.g. `python src/db/seed.py`) by ensuring the
-# project root is on sys.path so `import src...` works.
-if __package__ is None or __package__ == "":  # pragma: no cover
-    _ROOT = Path(__file__).resolve().parents[2]
-    if str(_ROOT) not in sys.path:
-        sys.path.insert(0, str(_ROOT))
 
 from src.db.connection import connect, init_db
 
@@ -133,18 +141,24 @@ def _seed_all(conn: sqlite3.Connection, *, cfg: SeedConfig, db_path: str) -> Non
             rep.add_quality(q)
 
         if len(batch) >= cfg.insert_batch_size:
-            # Important: insert request rows first, then their dependent quality rows.
-            # This avoids FK failures when q_batch reaches the threshold before batch.
             _insert_requests(conn, batch)
-            if q_batch:
-                _insert_quality_scores(conn, q_batch)
             batch.clear()
+        if len(q_batch) >= cfg.insert_batch_size:
+            # FK safety: ensure requests exist before inserting quality_scores.
+            if batch:
+                _insert_requests(conn, batch)
+                batch.clear()
+            _insert_quality_scores(conn, q_batch)
             q_batch.clear()
 
     if batch:
         _insert_requests(conn, batch)
+        batch.clear()
     if q_batch:
-        # Remaining requests have been inserted above, so FK is satisfied.
+        # FK safety: quality_scores reference requests.
+        if batch:
+            _insert_requests(conn, batch)
+            batch.clear()
         _insert_quality_scores(conn, q_batch)
 
     # Compute deployment_state_current from the last cfg.window_sec of requests.
@@ -1241,5 +1255,9 @@ class _ReportBuilder:
 
 
 if __name__ == "__main__":
-    path = seed()
+    # When running the seed script directly, default to generating a window
+    # ending "today" (wall-clock), not the fixed SeedConfig.base_now used for
+    # deterministic tests.
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    path = seed(cfg=SeedConfig(base_now=now, days=15))
     print(f"Seeded context DB at: {path}")

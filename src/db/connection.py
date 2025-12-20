@@ -53,7 +53,6 @@ def execute(conn: sqlite3.Connection, sql: str, params: Iterable[Any] | None = N
     conn.execute(sql, tuple(params or ()))
     conn.commit()
 
-
 def fetch_one(conn: sqlite3.Connection, sql: str, params: Iterable[Any] | None = None) -> dict[str, Any] | None:
     """
     Run a SELECT and return one row (dict) or None.
