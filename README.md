@@ -18,23 +18,35 @@ A **Context Layer** that:
 3. Correlates async quality scores with routing decisions
 4. Exposes tools for an LLM agent to query and interpret
 
-## Architecture
+
+### Architecture (Agent Layer → Context API → Data Layer)
+
+This is the updated (current) version of the original “Arcpoint Context Layer” plan, mapped to the codebase:
 
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Health Checks  │────▶│                  │────▶│  Routing Engine │
-│  (mock probes)  │     │   Context Layer  │     │  (queries state)│
-└─────────────────┘     │                  │     └─────────────────┘
-                        │  ┌────────────┐  │
-┌─────────────────┐     │  │  SQLite    │  │     ┌─────────────────┐
-│  Request Logs   │────▶│  │  Database  │  │────▶│   LLM Agent     │
-│                 │     │  └────────────┘  │     │  (debugging)    │
-└─────────────────┘     │                  │     └─────────────────┘
-                        │  ┌────────────┐  │
-┌─────────────────┐     │  │  Context   │  │     ┌─────────────────┐
-│  Quality Scores │────▶│  │  API       │  │────▶│   Operators     │
-│  (async)        │     │  └────────────┘  │     │  (dashboards)   │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
+┌──────────────────────────────────────────-------------┐
+│ Agent Layer                                           │
+│ - src/main.py (CLI)                                   │
+│ - src/agent/react_loop_graph.py (plan↔execute)        │
+│ - src/agent/react_category_prompts.py (system prompt) │
+│ - src/agent/llm.py (OpenAI/Ollama)                    │
+└──────────────────────┬──────────────────-------------─┘
+                       │ tool calls (LangChain tools)
+                       ▼
+┌──────────────────────────────────────────---┐
+│ Context API                                 │
+│ - src/context/api.py (domain tools)         │
+│ - src/context/sql_tools.py (safe_sql_query) │
+└──────────────────────┬───────────────────---┘
+                       │ SQL (read-only)
+                       ▼
+┌─────────────────────────────────────────--─┐
+│ Data Layer                                 │
+│ - src/db/schema.sql (DDL)                  │
+│ - src/db/connection.py (db helpers)        │
+│ - src/db/seed.py (deterministic generator) │
+│ - data/context.db (generated SQLite DB)    │
+└──────────────────────────────────────────--┘
 ```
 
 ## Key Concepts
