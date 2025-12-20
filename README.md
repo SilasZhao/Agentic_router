@@ -4,19 +4,19 @@ A real-time context system for intelligent inference routing. This system ingest
 
 ## Problem
 
-Route ~10K inference requests/day across 10 models and 3 backends. The routing engine needs millisecond-level answers to:
+Monitor and debug an inference platform that routes requests across multiple models and backends. Operators need fast, trustworthy answers to:
 
 - **"What's healthy now?"** — Which deployments are up, degraded, or down?
-- **"Where should this request go?"** — Given user tier, budget, current load, and SLAs
+- **"What happened?"** — What incidents, errors, or timeouts are currently active?
 - **"Why did this happen?"** — Debug slow responses, errors, quality drops
 
 ## Solution
 
-A **Context Layer** that:
+A **database-backed monitoring + debugging layer** that:
 1. Tracks deployment health (model + backend combinations)
 2. Stores request decisions with full routing context
 3. Correlates async quality scores with routing decisions
-4. Exposes tools for an LLM agent to query and interpret
+4. Exposes read-only tools for an LLM agent to query and interpret the database
 
 
 ### Architecture (Agent Layer → Context API → Data Layer)
